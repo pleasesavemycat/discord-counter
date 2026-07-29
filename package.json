@@ -1,0 +1,18 @@
+{
+  "name": "discord-counter",
+  "version": "1.0.0",
+  "description": "A Discord bot that tracks how often an emoji string appears in a channel and displays year-to-date count + days since last seen in the channel topic.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "register": "node src/register-commands.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}
