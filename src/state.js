@@ -38,11 +38,23 @@ export async function loadState() {
   return state;
 }
 
-async function writeNow() {
+async function doWrite() {
   await mkdir(DATA_DIR, { recursive: true });
-  const tmp = `${STATE_FILE}.tmp`;
+  // Include the pid in the temp name so separate processes can't collide.
+  const tmp = `${STATE_FILE}.${process.pid}.tmp`;
   await writeFile(tmp, JSON.stringify(state, null, 2));
   await rename(tmp, STATE_FILE); // atomic replace
+}
+
+// Serialize all writes through a single chain so a debounced save and a
+// shutdown flush (or a double shutdown signal) can never run concurrently and
+// race on the temp file — the cause of the ENOENT-on-rename error.
+let writeQueue = Promise.resolve();
+
+function writeNow() {
+  const run = writeQueue.catch(() => {}).then(doWrite);
+  writeQueue = run.catch(() => {}); // swallow errors so the chain stays alive
+  return run; // caller still sees this write's own success/failure
 }
 
 /** Debounced save so bursts of sightings don't thrash the disk. */

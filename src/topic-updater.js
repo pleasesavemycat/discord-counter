@@ -4,7 +4,11 @@
 // channel. We enforce a conservative minimum interval between edits and
 // coalesce rapid requests: only the most recent desired topic is ever written.
 
-const DEFAULT_MIN_INTERVAL_MS = 6 * 60 * 1000; // 6 min -> < 2 per 10 min
+// Discord allows ~2 channel name/topic edits per 10 minutes. A flat 5-minute
+// spacing keeps us at that ceiling (2 per 10 min) — the fastest a topic can
+// safely refresh. Going lower risks 429s (discord.js will queue and self-
+// throttle, which adds lag rather than speeding things up).
+const DEFAULT_MIN_INTERVAL_MS = 5 * 60 * 1000;
 
 export class TopicUpdater {
   constructor(minIntervalMs = DEFAULT_MIN_INTERVAL_MS) {

@@ -34,6 +34,11 @@ if (!token) {
 
 const refreshMinutes = Number(process.env.TOPIC_REFRESH_MINUTES) || 60;
 
+// Minimum spacing between topic edits, in seconds. Default 300s (5 min) — the
+// Discord rate-limit floor. Lower values risk 429s and can make updates lag
+// more, not less. Env override lets you experiment.
+const topicMinIntervalSec = Number(process.env.TOPIC_MIN_INTERVAL_SECONDS) || 300;
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -42,7 +47,7 @@ const client = new Client({
   ],
 });
 
-const topics = new TopicUpdater();
+const topics = new TopicUpdater(topicMinIntervalSec * 1000);
 
 /** Queue a topic update for a channel using its freshest stored stats. */
 function refreshTopic(channel) {
@@ -195,7 +200,10 @@ client.on(Events.GuildCreate, registerGuildCommands);
 
 // ---- Lifecycle --------------------------------------------------------------
 
+let shuttingDown = false;
 async function shutdown(signal) {
+  if (shuttingDown) return; // ignore a second Ctrl+C / duplicate signal
+  shuttingDown = true;
   console.log(`\nReceived ${signal}, shutting down...`);
   try {
     await flushState();
