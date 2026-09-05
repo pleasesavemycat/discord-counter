@@ -5,6 +5,7 @@ import {
   PermissionFlagsBits,
 } from "discord.js";
 import { countOccurrences } from "./counter.js";
+import { messagesSince } from "./history.js";
 
 export const counterCommand = new SlashCommandBuilder()
   .setName("counter")
@@ -42,8 +43,10 @@ export const PRIVILEGED_SUBCOMMANDS = new Set(["set", "backfill", "clear"]);
 export const REQUIRED_PERMISSION = PermissionFlagsBits.ManageChannels;
 
 /**
- * Walk a channel's history and tally occurrences of `trackString` for the
- * current calendar year (UTC). Returns { count, year, lastSeen }.
+ * Walk a channel's history — its top-level messages plus every thread that
+ * could hold a message this year — and tally occurrences of `trackString` for
+ * the current calendar year (UTC).
+ * Returns { count, year, lastSeen, threads, skippedThreads }.
  *
  * discord.js transparently handles pagination rate limits; for very active
  * channels this can take a while, which is why callers should defer the reply.
@@ -54,30 +57,16 @@ export async function backfillChannel(channel, trackString, now = Date.now()) {
 
   let count = 0;
   let lastSeen = null;
-  let before;
+  const stats = {};
 
-  while (true) {
-    const batch = await channel.messages.fetch({ limit: 100, before });
-    if (batch.size === 0) break;
-
-    let reachedYearStart = false;
-    for (const msg of batch.values()) {
-      if (msg.createdTimestamp < yearStartMs) {
-        reachedYearStart = true;
-        break;
-      }
-      const hits = countOccurrences(msg.content, trackString);
-      if (hits > 0) {
-        count += hits;
-        if (!lastSeen || msg.createdTimestamp > lastSeen) {
-          lastSeen = msg.createdTimestamp;
-        }
-      }
-      before = msg.id; // oldest seen so far -> next page continues before it
+  for await (const msg of messagesSince(channel, yearStartMs, stats)) {
+    const hits = countOccurrences(msg.content, trackString);
+    if (hits === 0) continue;
+    count += hits;
+    if (!lastSeen || msg.createdTimestamp > lastSeen) {
+      lastSeen = msg.createdTimestamp;
     }
-
-    if (reachedYearStart || batch.size < 100) break;
   }
 
-  return { count, year, lastSeen };
+  return { count, year, lastSeen, ...stats };
 }

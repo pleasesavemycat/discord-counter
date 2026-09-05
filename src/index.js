@@ -54,18 +54,36 @@ function refreshTopic(channel) {
   topics.request(channel, () => formatTopic(getChannel(channel.id)));
 }
 
+/**
+ * Threads roll up into the channel that owns them: that's where the tracked
+ * entry lives and the only place a topic can be written. For a thread, returns
+ * the parent channel (fetching it if it isn't cached); for anything else, the
+ * channel itself. Null if a thread's parent can't be resolved.
+ */
+async function trackedChannelFor(channel) {
+  if (!channel?.isThread()) return channel;
+  return channel.parent ?? client.channels.fetch(channel.parentId).catch(() => null);
+}
+
+/** Id-only version of the above for the hot path: no fetch, no await. */
+function trackedChannelIdFor(message) {
+  return message.channel?.isThread() ? message.channel.parentId : message.channelId;
+}
+
 // ---- Message tracking -------------------------------------------------------
 
-client.on(Events.MessageCreate, (message) => {
+client.on(Events.MessageCreate, async (message) => {
   if (message.author?.bot) return;
-  const entry = getChannel(message.channelId);
+  const channelId = trackedChannelIdFor(message);
+  const entry = getChannel(channelId);
   if (!entry) return;
 
   const hits = countOccurrences(message.content, entry.trackString);
   if (hits === 0) return;
 
-  recordSightings(message.channelId, hits, message.createdTimestamp);
-  refreshTopic(message.channel);
+  recordSightings(channelId, hits, message.createdTimestamp);
+  const channel = await trackedChannelFor(message.channel);
+  if (channel) refreshTopic(channel);
 });
 
 // ---- Slash commands ---------------------------------------------------------
@@ -87,13 +105,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   try {
+    // Commands run inside a thread apply to the thread's parent channel.
+    const channel =
+      (await trackedChannelFor(interaction.channel)) ?? interaction.channel;
+    const channelId = channel?.id ?? interaction.channelId;
+    const where =
+      channelId === interaction.channelId
+        ? "this channel"
+        : `<#${channelId}> (this thread's parent channel)`;
+
     if (sub === "set") {
       const trackString = interaction.options.getString("string", true);
-      setTracking(interaction.channelId, trackString);
-      refreshTopic(interaction.channel);
+      setTracking(channelId, trackString);
+      refreshTopic(channel);
       return interaction.reply({
         content:
-          `Now counting ${trackString} in this channel. ` +
+          `Now counting ${trackString} in ${where}. ` +
           "The stats will appear in the channel topic shortly.\n" +
           "Run `/counter backfill` to seed the year-to-date count from history.",
         flags: MessageFlags.Ephemeral,
@@ -101,7 +128,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (sub === "show") {
-      const entry = getChannel(interaction.channelId);
+      const entry = getChannel(channelId);
       if (!entry) {
         return interaction.reply({
           content:
@@ -119,7 +146,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (sub === "backfill") {
-      const entry = getChannel(interaction.channelId);
+      const entry = getChannel(channelId);
       if (!entry) {
         return interaction.reply({
           content: "Nothing is tracked here yet. Use `/counter set` first.",
@@ -127,21 +154,25 @@ client.on(Events.InteractionCreate, async (interaction) => {
         });
       }
       await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-      const result = await backfillChannel(
-        interaction.channel,
-        entry.trackString,
-      );
-      applyBackfill(interaction.channelId, result);
-      refreshTopic(interaction.channel);
+      const result = await backfillChannel(channel, entry.trackString);
+      applyBackfill(channelId, result);
+      refreshTopic(channel);
+      const t = result.threads;
+      const threadNote = t ? ` (incl. ${t} thread${t === 1 ? "" : "s"})` : "";
+      const s = result.skippedThreads;
+      const skippedNote = s
+        ? `\n⚠️ Skipped ${s} thread${s === 1 ? "" : "s"} the bot can't read.`
+        : "";
       return interaction.editReply(
         `Backfill complete: **${result.count}** occurrences of ` +
-          `${entry.trackString} in ${result.year} · ` +
-          lastSeenPhrase(result.lastSeen),
+          `${entry.trackString} in ${result.year}${threadNote} · ` +
+          lastSeenPhrase(result.lastSeen) +
+          skippedNote,
       );
     }
 
     if (sub === "clear") {
-      const had = clearTracking(interaction.channelId);
+      const had = clearTracking(channelId);
       return interaction.reply({
         content: had
           ? "Stopped tracking this channel. (The topic is left as-is.)"

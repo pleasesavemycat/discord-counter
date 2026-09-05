@@ -17,6 +17,9 @@ for both unicode emoji (`🎉`) and custom Discord emoji (`<:party:123>`).
 ## How it works
 
 - A live listener increments a persisted per-channel count as messages arrive.
+- Messages posted in a channel's **threads** count toward that channel (the
+  topic lives on the parent, not the thread). Backfill walks active threads and
+  any archived this year too.
 - Stats are written to the channel topic through a **throttled updater**.
   Discord limits channel-topic edits to ~2 per 10 minutes per channel, so the
   bot coalesces rapid sightings and also refreshes on a timer (default hourly)
@@ -40,6 +43,8 @@ On the **OAuth2 → URL Generator** tab, select scope **`bot`** and permissions:
 - **View Channel**
 - **Read Message History** (needed for `/counter backfill`)
 - **Manage Channels** (needed to edit the channel topic)
+- **Manage Threads** (optional: lets `/counter backfill` see private archived
+  threads the bot hasn't joined)
 
 Open the generated URL to add the bot to your server.
 
@@ -56,7 +61,8 @@ For a global rollout instead, run `npm run register` (propagation takes up to ~1
 
 ## Usage
 
-Run these in the channel you want to track:
+Run these in the channel you want to track (run from inside a thread, they
+apply to the thread's parent channel):
 
 | Command | Who | What it does |
 | --- | --- | --- |
