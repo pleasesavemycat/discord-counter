@@ -8,6 +8,8 @@
 //       count: 42,            // occurrences so far in `year`
 //       year: 2026,           // year the count belongs to (for YTD reset)
 //       lastSeen: 1690000000000 | null  // ms timestamp of last sighting
+//       countedThrough: 1690000000000 | null  // every message created at or
+//           // before this ms is accounted for; startup catch-up resumes here
 //     }
 //   }
 // }
@@ -94,6 +96,8 @@ export function setTracking(channelId, trackString) {
     count: existing?.count ?? 0,
     year: existing?.year ?? new Date().getUTCFullYear(),
     lastSeen: existing?.lastSeen ?? null,
+    // History before this moment is only ever counted by an explicit backfill.
+    countedThrough: existing?.countedThrough ?? Date.now(),
   };
   saveState();
   return state.channels[channelId];
@@ -117,10 +121,25 @@ export function ensureCurrentYear(entry, now = Date.now()) {
   return entry;
 }
 
-/** Record `occurrences` new sightings at time `at`. */
+function advanceCursor(entry, throughMs) {
+  if (!entry.countedThrough || throughMs > entry.countedThrough) {
+    entry.countedThrough = throughMs;
+  }
+}
+
+/**
+ * Record a live message: `occurrences` new sightings at time `at` (0 is fine).
+ * Either way the channel's history is now accounted for through `at`; that
+ * cursor is where a startup catch-up resumes. A cursor-only change isn't saved
+ * on its own — it rides along with the next save (a hit, the hourly refresh,
+ * shutdown) — so after a crash the worst case is re-walking a few messages
+ * that had no hits.
+ */
 export function recordSightings(channelId, occurrences, at = Date.now()) {
   const entry = state.channels[channelId];
   if (!entry) return null;
+  advanceCursor(entry, at);
+  if (occurrences === 0) return entry;
   ensureCurrentYear(entry, at);
   entry.count += occurrences;
   if (!entry.lastSeen || at > entry.lastSeen) entry.lastSeen = at;
@@ -129,12 +148,37 @@ export function recordSightings(channelId, occurrences, at = Date.now()) {
 }
 
 /** Overwrite a channel's tallies (used after a history backfill). */
-export function applyBackfill(channelId, { count, year, lastSeen }) {
+export function applyBackfill(channelId, { count, year, lastSeen, scannedAt }) {
   const entry = state.channels[channelId];
   if (!entry) return null;
   entry.count = count;
   entry.year = year;
   entry.lastSeen = lastSeen;
+  if (scannedAt) advanceCursor(entry, scannedAt);
   saveState();
   return entry;
+}
+
+/** Fold in what a startup catch-up scan found and move the cursor to when it began. */
+export function applyCatchUp(channelId, { hits, lastSeen, scannedAt }) {
+  const entry = state.channels[channelId];
+  if (!entry) return null;
+  ensureCurrentYear(entry, scannedAt);
+  entry.count += hits;
+  if (lastSeen && (!entry.lastSeen || lastSeen > entry.lastSeen)) {
+    entry.lastSeen = lastSeen;
+  }
+  advanceCursor(entry, scannedAt);
+  saveState();
+  return entry;
+}
+
+/**
+ * First ms a startup catch-up should look at for `entry`. Entries saved before
+ * the cursor existed fall back to the last sighting (every hit after it is by
+ * definition uncounted), and to "now" if there has never been one — then, as
+ * before, only an explicit backfill looks at history.
+ */
+export function catchUpFloor(entry, now = Date.now()) {
+  return (entry.countedThrough ?? entry.lastSeen ?? now) + 1;
 }

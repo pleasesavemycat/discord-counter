@@ -46,7 +46,8 @@ export const REQUIRED_PERMISSION = PermissionFlagsBits.ManageChannels;
  * Walk a channel's history — its top-level messages plus every thread that
  * could hold a message this year — and tally occurrences of `trackString` for
  * the current calendar year (UTC).
- * Returns { count, year, lastSeen, threads, skippedThreads }.
+ * Returns { count, year, lastSeen, scannedAt, threads, skippedThreads };
+ * `scannedAt` is taken before the first fetch, so it is a safe new cursor.
  *
  * discord.js transparently handles pagination rate limits; for very active
  * channels this can take a while, which is why callers should defer the reply.
@@ -68,5 +69,5 @@ export async function backfillChannel(channel, trackString, now = Date.now()) {
     }
   }
 
-  return { count, year, lastSeen, ...stats };
+  return { count, year, lastSeen, scannedAt: now, ...stats };
 }

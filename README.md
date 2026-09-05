@@ -20,11 +20,16 @@ for both unicode emoji (`🎉`) and custom Discord emoji (`<:party:123>`).
 - Messages posted in a channel's **threads** count toward that channel (the
   topic lives on the parent, not the thread). Backfill walks active threads and
   any archived this year too.
+- On startup the bot re-walks each tracked channel from where its count left
+  off, so anything posted while it was down is added. (That channel's live
+  messages are held for the few seconds the walk takes, then counted.)
 - Stats are written to the channel topic through a **throttled updater**.
   Discord limits channel-topic edits to ~2 per 10 minutes per channel, so the
   bot coalesces rapid sightings and also refreshes on a timer (default hourly)
   so "days since last seen" stays current.
-- State lives in `data/state.json` and survives restarts.
+- State lives in `data/state.json` and survives restarts. Deleting it means
+  the next start only counts from that moment on; run `/counter backfill` to
+  rebuild the year.
 
 ## Setup
 

@@ -9,16 +9,17 @@ import {
 import {
   loadState,
   flushState,
+  saveState,
   getChannel,
   getTrackedChannels,
   setTracking,
   clearTracking,
-  recordSightings,
   applyBackfill,
   ensureCurrentYear,
 } from "./state.js";
-import { countOccurrences, formatTopic, lastSeenPhrase } from "./counter.js";
+import { formatTopic, lastSeenPhrase } from "./counter.js";
 import { TopicUpdater } from "./topic-updater.js";
+import { CatchUp } from "./catch-up.js";
 import {
   commandData,
   backfillChannel,
@@ -49,6 +50,15 @@ const client = new Client({
 
 const topics = new TopicUpdater(topicMinIntervalSec * 1000);
 
+// Counts live messages, and on startup walks each tracked channel from where
+// its count left off so nothing posted while the bot was down is missed.
+const catchUp = new CatchUp({
+  onSighting: (message) =>
+    trackedChannelFor(message.channel).then((channel) => {
+      if (channel) refreshTopic(channel);
+    }),
+});
+
 /** Queue a topic update for a channel using its freshest stored stats. */
 function refreshTopic(channel) {
   topics.request(channel, () => formatTopic(getChannel(channel.id)));
@@ -72,18 +82,11 @@ function trackedChannelIdFor(message) {
 
 // ---- Message tracking -------------------------------------------------------
 
-client.on(Events.MessageCreate, async (message) => {
+client.on(Events.MessageCreate, (message) => {
   if (message.author?.bot) return;
   const channelId = trackedChannelIdFor(message);
-  const entry = getChannel(channelId);
-  if (!entry) return;
-
-  const hits = countOccurrences(message.content, entry.trackString);
-  if (hits === 0) return;
-
-  recordSightings(channelId, hits, message.createdTimestamp);
-  const channel = await trackedChannelFor(message.channel);
-  if (channel) refreshTopic(channel);
+  if (!getChannel(channelId)) return;
+  catchUp.handleLive(channelId, message);
 });
 
 // ---- Slash commands ---------------------------------------------------------
@@ -209,9 +212,13 @@ client.once(Events.ClientReady, async (c) => {
   // Register commands per guild for instant availability.
   await Promise.all(c.guilds.cache.map(registerGuildCommands));
 
+  // Count whatever was posted while we were down, before the first topic push.
+  await catchUp.run((id) => c.channels.fetch(id));
+
   // Push an initial topic for every tracked channel and start a periodic
   // refresh so "days since last seen" stays current without new sightings.
   const refreshAll = async () => {
+    saveState(); // also persists cursor-only progress (see recordSightings)
     for (const [channelId] of getTrackedChannels()) {
       try {
         const channel = await c.channels.fetch(channelId);
@@ -249,4 +256,5 @@ process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 await loadState();
+catchUp.prepare(); // before login, so nothing live can move a cursor first
 await client.login(token);
