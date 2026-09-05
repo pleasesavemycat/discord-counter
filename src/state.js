@@ -92,7 +92,9 @@ export function getTrackedChannels() {
 export function setTracking(channelId, trackString) {
   const existing = state.channels[channelId];
   state.channels[channelId] = {
-    trackString,
+    // Discord's emoji picker leaves a trailing space; that must not become
+    // part of what we look for.
+    trackString: trackString.trim(),
     count: existing?.count ?? 0,
     year: existing?.year ?? new Date().getUTCFullYear(),
     lastSeen: existing?.lastSeen ?? null,

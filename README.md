@@ -13,6 +13,9 @@ keeps a live tally in the **channel topic**:
 
 It counts every _occurrence_ (so `🎉🎉🎉` in one message counts as 3) and works
 for both unicode emoji (`🎉`) and custom Discord emoji (`<:party:123>`).
+Multi-emoji strings tolerate whitespace between the emoji: Discord's desktop
+emoji picker and `:autocomplete:` insert a space after each emoji, so `🐿️ 💀`
+counts as `🐿️💀`. Order still matters, and plain text is matched exactly.
 
 ## How it works
 

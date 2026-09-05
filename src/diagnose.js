@@ -14,7 +14,11 @@
 
 import "dotenv/config";
 import { Client, GatewayIntentBits } from "discord.js";
-import { countOccurrences, stripVariationSelectors } from "./counter.js";
+import {
+  countOccurrences,
+  needleTokens,
+  stripVariationSelectors,
+} from "./counter.js";
 import { loadState, getChannel } from "./state.js";
 import { messagesSince } from "./history.js";
 
@@ -52,6 +56,16 @@ const codepoints = (s) =>
     .map((c) => "U+" + c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0"))
     .join(" ");
 
+// True when `content` contains every emoji of `needle` somewhere, in any order
+// — a message that "looks like" it should count.
+function hasEveryEmoji(content, needle) {
+  const emoji = needleTokens(needle).filter((t) => t.emoji);
+  if (emoji.length === 0) return false;
+  const hay = stripVariationSelectors(content);
+  return emoji.every((t) => hay.includes(stripVariationSelectors(t.text)));
+}
+const clip = (s, n = 120) => (s.length > n ? s.slice(0, n) + "…" : s);
+
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -78,10 +92,18 @@ client.once("clientReady", async (c) => {
 
   // Same walk as /counter backfill: the channel plus its threads.
   const stats = {};
+  const botCounts = candidates.map(() => 0); // hits inside bot/webhook posts
+  const nearMisses = candidates.map(() => []); // every emoji present, no match
   for await (const msg of messagesSince(channel, yearStartMs, stats)) {
     scanned++;
+    const fromBot = Boolean(msg.author?.bot || msg.webhookId);
     candidates.forEach((cand, i) => {
-      counts[i] += countOccurrences(msg.content, cand.s);
+      const n = countOccurrences(msg.content, cand.s);
+      counts[i] += n;
+      if (fromBot) botCounts[i] += n;
+      if (n === 0 && nearMisses[i].length < 10 && hasEveryEmoji(msg.content, cand.s)) {
+        nearMisses[i].push(msg);
+      }
     });
   }
 
@@ -96,8 +118,35 @@ client.once("clientReady", async (c) => {
     console.log(`  string:     "${cand.s}"`);
     console.log(`  codepoints: ${codepoints(cand.s)}`);
     console.log(`  count:      ${counts[i]}`);
+    if (botCounts[i]) {
+      console.log(`    of which ${botCounts[i]} in bot/webhook posts: backfill and startup`);
+      console.log(`    catch-up count those, the live listener skips them.`);
+    }
+    if (nearMisses[i].length) {
+      console.log(`  near misses: contain every emoji of the string but don't match`);
+      console.log(`  (first ${nearMisses[i].length}; compare codepoints and spacing/order):`);
+      for (const m of nearMisses[i]) {
+        const c = clip(m.content);
+        console.log(`    • ${JSON.stringify(c)}  [${codepoints(c)}]`);
+        console.log(`      ${m.url}`);
+      }
+    }
     console.log("");
   });
+
+  if (stored) {
+    const through = stored.countedThrough
+      ? new Date(stored.countedThrough).toISOString()
+      : "none";
+    console.log(
+      `state.json says: count=${stored.count} year=${stored.year} countedThrough=${through}`,
+    );
+    if (stored.year === year && stored.count !== counts[0]) {
+      console.log(`=> Stored count differs from a fresh scan by ${counts[0] - stored.count}.`);
+      console.log("   /counter backfill would set it to the scan result.");
+    }
+    console.log("");
+  }
 
   if (candidates.length === 2) {
     if (counts[0] === counts[1]) {
