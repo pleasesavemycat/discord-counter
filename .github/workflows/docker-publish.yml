@@ -47,6 +47,13 @@ jobs:
           # The NASync DXP line is x86_64; no other target is worth the build time.
           platforms: linux/amd64
           push: true
+          # Publish a plain manifest, not an OCI index with an attestation
+          # entry beside it. We only build one platform, so the index buys
+          # nothing, and NAS Docker daemons are often old enough to trip over
+          # the unknown/unknown attestation child or surface it as a phantom
+          # image in the UI.
+          provenance: false
+          sbom: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
