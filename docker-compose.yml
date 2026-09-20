@@ -1,0 +1,23 @@
+services:
+  discord-counter:
+    build: .
+    image: discord-counter:local
+    container_name: discord-counter
+    restart: unless-stopped
+    # Reap orphaned processes and forward signals cleanly; the bot flushes its
+    # state file on SIGTERM, so it needs the signal to actually arrive.
+    init: true
+    stop_grace_period: 20s
+    env_file: .env
+    environment:
+      # Only affects log timestamps — the year-to-date rollover is always UTC.
+      TZ: ${TZ:-UTC}
+    volumes:
+      # DATA_PATH lets you point this at any NAS share, e.g.
+      # DATA_PATH=/volume1/docker/discord-counter/data in .env.
+      - ${DATA_PATH:-./data}:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

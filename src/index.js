@@ -1,9 +1,11 @@
 import "dotenv/config";
+import { writeFile } from "node:fs/promises";
 import {
   Client,
   GatewayIntentBits,
   Events,
   MessageFlags,
+  Status,
 } from "discord.js";
 
 import {
@@ -47,6 +49,16 @@ const client = new Client({
     GatewayIntentBits.MessageContent, // privileged: enable it in the dev portal
   ],
 });
+
+// Liveness beacon for the container healthcheck (src/healthcheck.js): touched
+// only while the gateway says READY, so a silently disconnected bot goes stale
+// and Docker restarts it. Harmless outside a container.
+const heartbeatFile = process.env.HEARTBEAT_FILE || "/tmp/heartbeat";
+
+function beat() {
+  if (client.ws.status !== Status.Ready) return;
+  writeFile(heartbeatFile, String(Date.now())).catch(() => {});
+}
 
 const topics = new TopicUpdater(topicMinIntervalSec * 1000);
 
@@ -232,6 +244,10 @@ client.once(Events.ClientReady, async (c) => {
   await refreshAll();
   const interval = setInterval(refreshAll, refreshMinutes * 60 * 1000);
   if (typeof interval.unref === "function") interval.unref();
+
+  beat();
+  const heartbeat = setInterval(beat, 30_000);
+  if (typeof heartbeat.unref === "function") heartbeat.unref();
 });
 
 client.on(Events.GuildCreate, registerGuildCommands);

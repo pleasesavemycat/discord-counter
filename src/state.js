@@ -15,11 +15,15 @@
 // }
 
 import { readFile, writeFile, mkdir, rename } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = join(__dirname, "..", "data");
+// DATA_DIR lets the container point this at a mounted volume; unset, it stays
+// the repo's own data/ folder so a local `npm start` behaves as it always has.
+const DATA_DIR = process.env.DATA_DIR
+  ? resolve(process.env.DATA_DIR)
+  : join(__dirname, "..", "data");
 const STATE_FILE = join(DATA_DIR, "state.json");
 
 let state = { channels: {} };
