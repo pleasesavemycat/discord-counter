@@ -1,20 +1,31 @@
+# For installing on a NAS through the Docker app's UI, use the ready-to-paste
+# version in the README instead — it has no ${...} placeholders to resolve.
+# This file is for running via the `docker compose` CLI, where values come
+# from a .env file sitting next to it.
+
 services:
   discord-counter:
-    build: .
-    image: discord-counter:local
+    image: ghcr.io/pleasesavemycat/discord-counter:latest
+    # Uncomment to build from this checkout instead of pulling the published image.
+    # build: .
     container_name: discord-counter
     restart: unless-stopped
     # Reap orphaned processes and forward signals cleanly; the bot flushes its
     # state file on SIGTERM, so it needs the signal to actually arrive.
     init: true
     stop_grace_period: 20s
-    env_file: .env
     environment:
-      # Only affects log timestamps — the year-to-date rollover is always UTC.
+      DISCORD_TOKEN: ${DISCORD_TOKEN:?set DISCORD_TOKEN in .env next to this file}
+      TOPIC_REFRESH_MINUTES: ${TOPIC_REFRESH_MINUTES:-60}
+      TOPIC_MIN_INTERVAL_SECONDS: ${TOPIC_MIN_INTERVAL_SECONDS:-300}
+      # The entrypoint chowns the data folder to this uid/gid and runs the bot
+      # as it. Only change these if you need the state file owned by a
+      # specific NAS user.
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      # Affects log timestamps only — the year-to-date rollover is always UTC.
       TZ: ${TZ:-UTC}
     volumes:
-      # DATA_PATH lets you point this at any NAS share, e.g.
-      # DATA_PATH=/volume1/docker/discord-counter/data in .env.
       - ${DATA_PATH:-./data}:/app/data
     logging:
       driver: json-file

@@ -64,104 +64,150 @@ npm install
 npm start
 ```
 
-To run it as a container instead (e.g. on a NAS), see
-[Run in Docker](#run-in-docker-ugreen-nas) below.
+To run it as a container on a NAS instead, see
+[Install on a UGREEN NAS](#install-on-a-ugreen-nas-docker-app-no-ssh) below —
+that path needs no shell on the NAS and no local build.
 
 Slash commands register automatically (per-guild, instantly) on startup.
 For a global rollout instead, run `npm run register` (propagation takes up to ~1 hour).
 
-## Run in Docker (UGREEN NAS)
+## Install on a UGREEN NAS (Docker app, no SSH)
 
-The bot is a single long-lived process with one piece of mutable state
-(`data/state.json`), so the container setup is deliberately plain: build on the
-NAS, bind-mount a folder for the state file, keep the token in `.env`.
+Every push to `main` publishes a ready-built `linux/amd64` image to
+`ghcr.io/pleasesavemycat/discord-counter:latest`, so the NAS only pulls — it
+never builds, and you never need a shell on it.
 
-### 1. Put the repo on the NAS
+### 1. Pull the image
 
-SSH in (UGOS: **Control Panel → Terminal & SNMP → Enable SSH**) and clone into a
-share you back up:
+In the UGOS **Docker** app, open the image/registry section, search for or
+enter:
 
-```bash
-mkdir -p /volume1/docker && cd /volume1/docker
-git clone <this-repo-url> discord-counter
-cd discord-counter
+```
+ghcr.io/pleasesavemycat/discord-counter
 ```
 
-Confirm the real path with `pwd` — `/volume1` is the usual UGOS mount point, but
-check rather than assume.
+and pull the `latest` tag. The package is public, so no registry account or
+credentials are needed. (Menu labels move around between UGOS versions; the
+step is "pull an image by name from a registry", wherever your build puts it.)
 
-### 2. Configure
+### 2. Create a folder for the state file
 
-```bash
-cp .env.example .env
-vi .env            # paste your DISCORD_TOKEN
+In **File Manager**, make a folder for `state.json` to live in — e.g.
+`docker/discord-counter/data` inside a share you back up. It only ever holds
+one small JSON file.
+
+You do **not** need to set its permissions. The container starts as root just
+long enough to take ownership of that folder, then drops to an unprivileged
+user (uid 1000 by default) for everything else — which is the whole reason a
+UI-only install works without a shell.
+
+### 3. Create the container
+
+Launch a container from the pulled image with:
+
+**Volume / folder mapping**
+
+| Host folder | Mount path |
+| --- | --- |
+| the folder from step 2 | `/app/data` |
+
+**Environment variables**
+
+| Variable | Value |
+| --- | --- |
+| `DISCORD_TOKEN` | your bot token (required) |
+| `TZ` | e.g. `America/Los_Angeles` (optional — log timestamps only) |
+| `TOPIC_REFRESH_MINUTES` | `60` (optional) |
+| `TOPIC_MIN_INTERVAL_SECONDS` | `300` (optional) |
+| `PUID` / `PGID` | `1000` (optional — only to own the state file as a specific NAS user) |
+
+**Other settings**
+
+- Enable **auto-restart** so the bot survives crashes and NAS reboots.
+- No port mappings. The bot makes an outbound connection to Discord and
+  listens on nothing.
+
+Start it, then open the container's log. `Logged in as <bot>#0000` means it's
+running; go set it up with `/counter set` in Discord.
+
+### Faster alternative: paste a compose project
+
+If your Docker app has a **Project** (compose) section, skip steps 1–3 and
+paste this, with your own token and folder path — it captures every setting at
+once:
+
+```yaml
+services:
+  discord-counter:
+    image: ghcr.io/pleasesavemycat/discord-counter:latest
+    container_name: discord-counter
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 20s
+    environment:
+      DISCORD_TOKEN: "paste-your-token-here"
+      TZ: "UTC"
+    volumes:
+      - /volume1/docker/discord-counter/data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 ```
 
-`.env` is gitignored and is the only place the token lives. By default the
-state file lands in `./data` next to the compose file; set `DATA_PATH` in `.env`
-to put it on a different share.
+Your token sits in that project file on the NAS, so treat the project folder as
+a secret. Check the host path against what File Manager shows for your share —
+`/volume1` is the usual UGOS mount point, but confirm rather than assume.
 
-### 3. Build and start
+### Updating
 
-```bash
-docker compose up -d --build
-docker compose logs -f          # expect "Logged in as <bot>#0000"
-```
+Pull `ghcr.io/pleasesavemycat/discord-counter:latest` again in the Docker app,
+then recreate the container from the new image, keeping the same folder mapping
+and environment variables. The state file is on the mounted folder, so counts
+survive. For a compose project, "pull and rebuild/recreate" does both.
 
-The image is built on the NAS, so it matches the machine's architecture
-(x86_64 on the NASync DXP line) with no cross-building.
+Every build is also tagged with its commit (`sha-abc1234`), so you can pin to a
+specific one, or roll back by recreating the container from an older tag.
 
-If the `data` folder ends up owned by root — Docker creates a missing bind-mount
-target as root — the container refuses to start and prints the exact `chown` to
-run. The container runs as uid 1000 (`node`), never root:
+### Health and logs
 
-```bash
-sudo chown -R 1000:1000 /volume1/docker/discord-counter/data
-```
-
-### 4. Keep it running
-
-`restart: unless-stopped` covers crashes and NAS reboots. On top of that the
-container reports a **healthcheck**: the bot touches a heartbeat file every 30s,
-but only while its Discord gateway connection is live, so a process that is
-running yet silently disconnected shows as `unhealthy` in `docker ps`. Pair it
-with an auto-restart watcher if you want that state actioned automatically —
-Docker itself does not restart unhealthy containers.
-
-### Doing things to a running container
-
-```bash
-docker compose logs -f                                    # follow logs
-docker compose restart                                    # restart
-docker compose down                                       # stop and remove
-docker compose exec discord-counter node src/diagnose.js <channelId>
-git pull && docker compose up -d --build                  # update
-```
-
-Shutdown is graceful: the bot flushes its state on SIGTERM, and
-`stop_grace_period: 20s` gives it room to finish.
-
-### Using the UGOS Docker UI instead
-
-UGOS **Docker → Project** can import this `docker-compose.yml` directly from the
-cloned folder. If your UGOS build's project importer rejects the `build:` key
-(some versions only accept prebuilt images), build once over SSH with
-`docker compose build`, then change `build: .` to `image: discord-counter:local`
-before importing — the image is already on the machine.
+- **Logs** are in the Docker app's log tab for the container.
+- **Health**: the container reports healthy/unhealthy on its own. The bot has
+  no HTTP surface, so liveness is a heartbeat it writes every 30s *only while
+  its Discord connection is live* — a bot that is running but silently
+  disconnected shows as `unhealthy` rather than looking fine. Note that Docker
+  does not restart unhealthy containers by itself; auto-restart only covers a
+  container that actually exits.
+- **Running `diagnose`**: use the container's terminal/console tab in the
+  Docker app and run `node src/diagnose.js <channelId>`.
 
 ### Backups
 
-Everything worth keeping is `data/state.json`. Include
-`/volume1/docker/discord-counter` in a UGOS backup or snapshot job and a restore
-is: clone, restore `.env` and `data/`, `docker compose up -d --build`.
+Everything worth keeping is the one `state.json` in the folder you mapped.
+Include it in a UGOS backup or snapshot job.
 
 ### Moving existing counts over
 
-If the bot is running somewhere else today, copy its `data/state.json` into the
-NAS `data/` folder **before** the first start, then `chown 1000:1000` it. The
-year-to-date counts and the `countedThrough` cursor carry over, and the startup
-catch-up counts whatever was posted during the move. Skip it and the bot starts
-from zero (recoverable with `/counter backfill`).
+If the bot runs somewhere else today, copy its `data/state.json` into the
+mapped folder (File Manager can upload it) **before** starting the container.
+Year-to-date counts and the backfill cursor carry over, and the startup
+catch-up counts anything posted during the move. Skip it and the bot starts
+from zero, recoverable with `/counter backfill`.
+
+## Run in Docker from the command line
+
+If you do have a shell (another host, or SSH on the NAS):
+
+```bash
+cp .env.example .env         # paste your token
+docker compose up -d         # pulls the published image
+docker compose logs -f
+```
+
+`docker-compose.yml` reads `DISCORD_TOKEN`, `DATA_PATH`, `TZ` and friends from
+that `.env`. Uncomment `build: .` in it to build from the checkout instead of
+pulling, and update with `docker compose pull && docker compose up -d`.
 
 ## Usage
 
@@ -187,3 +233,7 @@ make the year-to-date figure accurate from existing history.
 - Years are computed in UTC. The container's `TZ` only affects log timestamps.
 - In Docker, `DATA_DIR` overrides where `state.json` is written (set to
   `/app/data` in the image); unset, it stays the repo's `data/` folder.
+- The container starts as root only to fix the mounted folder's ownership,
+  then runs the bot as `PUID:PGID` (1000:1000 by default). Set `user:`
+  yourself to skip the root phase entirely, and the folder must already be
+  writable by that user.
